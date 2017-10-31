@@ -13,16 +13,18 @@ local pairs = pairs
 local setmetatable = setmetatable
 local sub = string.sub
 local tcp = ngx.socket.tcp
-
+local to_number = tonumber
+local char = string.char
 module(...)
 
 _VERSION = "0.1"
 
 local mt = { __index = _M }
 
-local LF = "\x0a"
-local EOL = "\x0d\x0a"
-local NULL_BYTE = "\x00"
+local LF = "\n"
+local CR = "\r"
+local EOF = "\r\n"
+local NULL_BYTE = "\0"
 local STATE_CONNECTED = 1
 local STATE_COMMAND_SENT = 2
 
@@ -32,7 +34,6 @@ function new(self, opts)
     if not sock then
         return nil, err
     end
-    
     if opts == nil then
 	opts = {username = "guest", password = "guest", vhost = "/", trailing_lf = true}
     end
@@ -53,8 +54,7 @@ end
 
 
 function _build_frame(self, command, headers, body)
-    local frame = {command, EOL}
-
+    local frame = {command, EOF}
     if body then
         headers["content-length"] = len(body)
     end
@@ -63,17 +63,18 @@ function _build_frame(self, command, headers, body)
         insert(frame, key)
         insert(frame, ":")
         insert(frame, value)
-        insert(frame, EOL)
+        insert(frame, EOF)
     end
-
-    insert(frame, EOL)
 
     if body then
+        insert(frame, EOF)
         insert(frame, body)
+	insert(frame, "\0")
+    else
+		insert(frame, EOF)
+    	insert(frame, "\0")
     end
 
-    insert(frame, NULL_BYTE)
-    insert(frame, EOL)
     return concat(frame, "")
 end
 
@@ -83,6 +84,7 @@ function _send_frame(self, frame)
     if not sock then
         return nil, "not initialized"
     end
+    
     return sock:send(frame)
 end
 
@@ -98,19 +100,18 @@ function _receive_frame(self)
     else
         resp = sock:receiveuntil(NULL_BYTE, {inclusive = true})
     end
+    
     local data, err, partial = resp()
     return data, err
 end
 
 
 function _login(self)
-    
     local headers = {}
     headers["accept-version"] = "1.2"
     headers["login"] = self.opts.username
     headers["passcode"] = self.opts.password
     headers["host"] = self.opts.vhost
-
     local ok, err = _send_frame(self, _build_frame(self, "CONNECT", headers, nil))
     if not ok then
         return nil, err
